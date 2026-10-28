@@ -15,7 +15,7 @@ const GEN_DEX_RANGES: Record<string, [number, number]> = {
   "9": [906, 1025],
 };
 
-// Sub-sets de Galerías (Trainer Gallery / Galarian Gallery / Shiny Vault) asociados a sets principales
+// Sub-sets de Galerías físicas (Trainer Gallery / Galarian Gallery / Shiny Vault) asociados a sets principales
 const SUBSET_COMPANIONS: Record<string, string[]> = {
   swsh9: ["swsh9tg"],
   swsh10: ["swsh10tg"],
@@ -27,6 +27,53 @@ const SUBSET_COMPANIONS: Record<string, string[]> = {
   "swsh4.5": ["swsh45sv"],
   sm115: ["sma"],
 };
+
+// Detector estricto para excluir sets y cartas digitales de Pokémon TCG Pocket (Genetic Apex, Mythical Island, P-A, etc.)
+const DIGITAL_POCKET_SET_NAMES = [
+  "genetic apex",
+  "genes formidables",
+  "mythical island",
+  "isla singular",
+  "space-time smackdown",
+  "pugna espaciotemporal",
+  "triumphant light",
+  "luz triunfal",
+  "shining revelry",
+  "festival brillante",
+  "celestial guardians",
+  "promos-a",
+  "promo-a",
+  "promos-b",
+  "promo-b",
+  "tcg pocket",
+  "pokémon pocket",
+];
+
+function isDigitalPocketSet(setId?: string, setName?: string, serieId?: string): boolean {
+  const cleanId = String(setId || "").toLowerCase().trim();
+  const cleanName = String(setName || "").toLowerCase().trim();
+  const cleanSerie = String(serieId || "").toLowerCase().trim();
+
+  if (cleanSerie === "tcgp" || cleanSerie.includes("pocket")) return true;
+
+  // En TCGdex, los sets de TCG Pocket usan códigos A1, A1a, A2, A2a, A3, B1, P-A, P-B, tcgp, etc.
+  if (/^(a\d+[a-z]*|b\d+[a-z]*|p-[a-z0-9]+|tcgp.*)$/i.test(cleanId)) {
+    return true;
+  }
+
+  for (const blockedName of DIGITAL_POCKET_SET_NAMES) {
+    if (cleanName.includes(blockedName)) return true;
+  }
+
+  return false;
+}
+
+function isDigitalPocketCard(cardId?: string, setName?: string, serieId?: string): boolean {
+  const rawId = String(cardId || "").trim();
+  const lastDash = rawId.lastIndexOf("-");
+  const setId = lastDash !== -1 ? rawId.substring(0, lastDash) : rawId;
+  return isDigitalPocketSet(setId, setName, serieId);
+}
 
 // Cachés en memoria del servidor para máxima velocidad
 let cachedSetsList: { id: string; name: string; rank: number; officialCount: number }[] | null = null;
@@ -83,7 +130,7 @@ function tcgdexCardIdToPtcgIoId(cardId: string): string {
   return `${mappedSet}-${strippedNum}`;
 }
 
-// 1. Carga y unifica el catálogo oficial de expansiones (TCGdex + Pokémon TCG API)
+// 1. Carga y unifica el catálogo oficial de expansiones FÍSICAS (excluyendo TCG Pocket)
 async function ensureSetsCatalog() {
   if (cachedSetsList && cachedSetsList.length > 0) return cachedSetsList;
 
@@ -100,6 +147,8 @@ async function ensureSetsCatalog() {
       const sets = await tcgdexRes.value.json();
       if (Array.isArray(sets)) {
         sets.forEach((s: any, idx: number) => {
+          if (isDigitalPocketSet(s.id, s.name, s.serie?.id)) return;
+
           const officialCount = Number(s.cardCount?.official || s.cardCount?.total || 0);
           const entry = {
             id: s.id,
@@ -121,6 +170,8 @@ async function ensureSetsCatalog() {
       const ptcgSets = ptcgJson?.data || [];
       if (Array.isArray(ptcgSets)) {
         ptcgSets.forEach((ps: any, idx: number) => {
+          if (isDigitalPocketSet(ps.id, ps.name, ps.series)) return;
+
           const idLower = String(ps.id || "").toLowerCase();
           const nameLower = String(ps.name || "").toLowerCase();
           const officialCount = Number(ps.printedTotal || ps.total || 0);
@@ -326,7 +377,7 @@ function extractPrice(card: any): {
   };
 }
 
-// 5. Respaldo en vivo con PriceCharting (CORREGIDO: Toma estrictamente la celda <td ... used_price> Ungraded/Raw)
+// 5. Respaldo en vivo con PriceCharting (Toma estrictamente la celda <td ... used_price> Ungraded/Raw)
 async function fetchPriceChartingFallback(
   cardName: string,
   cardNumber: string,
@@ -348,15 +399,12 @@ async function fetchPriceChartingFallback(
     if (!res.ok) return null;
     const html = await res.text();
 
-    // Si es una tabla de resultados de búsqueda, aislamos únicamente la primera fila de producto (<tr id="product-...">)
-    // para no leer nunca los encabezados <th> ni mezclar filas distintas
     let targetScopeHtml = html;
     const productRowMatch = html.match(/<tr[^>]*id="product-[^"]*"[^>]*>([\s\S]*?)<\/tr>/i);
     if (productRowMatch && productRowMatch[1]) {
       targetScopeHtml = productRowMatch[1];
     }
 
-    // Extrae el valor en USD únicamente dentro de la etiqueta <td> correspondiente (sin saltar jamás a la celda vecina)
     const extractTdCellPrice = (cellKeyRegex: string): number => {
       const tdRegex = new RegExp(
         `<td[^>]*(?:id|class)="[^"]*\\b(?:${cellKeyRegex})\\b[^"]*"[^>]*>([\\s\\S]*?)<\\/td>`,
@@ -373,13 +421,10 @@ async function fetchPriceChartingFallback(
       return 0;
     };
 
-    // En PriceCharting: used_price = Ungraded (Raw) | cib_price / complete_price = Grade 9 | new_price / graded_price = PSA 10
     const ungradedUsd = extractTdCellPrice("used_price");
     const grade9Usd = extractTdCellPrice("cib_price|complete_price");
     const psa10Usd = extractTdCellPrice("new_price|graded_price");
 
-    // REGLA ESTRICTA: El precio base de la carta SOLO puede ser el precio Ungraded (Raw).
-    // Nunca usamos PSA 9 ni PSA 10 como precio base.
     if (ungradedUsd > 0) {
       const variantPrices: Record<string, number> = {
         Normal: ungradedUsd,
@@ -389,9 +434,7 @@ async function fetchPriceChartingFallback(
 
       return { price: ungradedUsd, variantPrices };
     }
-  } catch {
-    // Si PriceCharting no responde a tiempo, continuamos sin bloquear
-  }
+  } catch {}
   return null;
 }
 
@@ -432,9 +475,11 @@ async function fetchPokemonTcgIoFallback(
   return null;
 }
 
-// 7. Obtiene una carta individual completa por ID combinando todas las fuentes de datos y precios
+// 7. Obtiene una carta individual completa por ID (ignorando cartas digitales de TCG Pocket)
 async function fetchSingleCardById(cardId: string): Promise<any | null> {
   const cleanId = cardId.trim();
+  if (isDigitalPocketCard(cleanId)) return null;
+
   if (fullCardObjectCache.has(cleanId)) {
     return fullCardObjectCache.get(cleanId);
   }
@@ -457,6 +502,10 @@ async function fetchSingleCardById(cardId: string): Promise<any | null> {
     }
   } catch {}
 
+  if (detail && isDigitalPocketCard(cleanId, detail?.set?.name, detail?.set?.serie?.id)) {
+    return null;
+  }
+
   let { price, source, variants, variantPrices } = detail
     ? extractPrice(detail)
     : { price: 0, source: "Sin precio" as const, variants: ["Estándar"], variantPrices: {} };
@@ -471,7 +520,6 @@ async function fetchSingleCardById(cardId: string): Promise<any | null> {
   let name = detail?.name || "Carta Pokémon";
   let localId = detail?.localId || cleanId.split("-").pop() || "1";
 
-  // Si falta la carta en TCGdex, o no tiene precio (price === 0), o no tiene imagen, consultar Pokémon TCG API
   if (!detail || price === 0 || !image) {
     const ptcgCard = await fetchPokemonTcgIoFallback(cleanId, detail?.name, localId);
     if (ptcgCard) {
@@ -497,7 +545,6 @@ async function fetchSingleCardById(cardId: string): Promise<any | null> {
     }
   }
 
-  // Si aún sigue sin precio, consultar PriceCharting (solo toma el precio Ungraded/Raw como precio base)
   if (price === 0 && name !== "Carta Pokémon") {
     const pcFallback = await fetchPriceChartingFallback(name, localId, setName);
     if (pcFallback && pcFallback.price > 0) {
@@ -691,7 +738,7 @@ function createCanonicalCardKey(card: { name: string; setName: string; number: s
   return `${cleanSet}__${cleanNum}__${cleanName}`;
 }
 
-// 10. Descarga y fusiona las cartas de un criterio desde múltiples fuentes
+// 10. Descarga y fusiona las cartas FÍSICAS de un criterio desde múltiples fuentes
 async function fetchCardsForCriterion(criterion: string): Promise<any[]> {
   const normalizedKey = criterion.trim();
   if (queryCardsCache.has(normalizedKey)) {
@@ -765,7 +812,12 @@ async function fetchCardsForCriterion(criterion: string): Promise<any[]> {
         }
       }
     } else if (type === "SET") {
-      const setId = value.split("|")[0].trim();
+      const [rawSetId, rawSetName] = value.split("|");
+      const setId = (rawSetId || "").trim();
+      if (isDigitalPocketSet(setId, rawSetName)) {
+        return [];
+      }
+
       const setIdsToFetch = [setId, ...(SUBSET_COMPANIONS[setId.toLowerCase()] || [])];
       const ptcgSetId = tcgdexSetToPtcgIoSet(setId);
 
@@ -778,6 +830,8 @@ async function fetchCardsForCriterion(criterion: string): Promise<any[]> {
       for (const resItem of setResponses) {
         if (resItem.status === "fulfilled" && resItem.value.ok) {
           const setObj = await resItem.value.json();
+          if (isDigitalPocketSet(setObj?.id, setObj?.name, setObj?.serie?.id)) continue;
+
           const officialSetTotal = Number(
             setObj?.cardCount?.official || setObj?.cardCount?.total || 0
           );
@@ -848,7 +902,15 @@ async function fetchCardsForCriterion(criterion: string): Promise<any[]> {
     console.error(`Error procesando criterio ${criterion}:`, err);
   }
 
-  const formattedTcgdex = tcgdexRawCards.map((c: any) => {
+  // Filtramos cualquier carta digital de Pokémon TCG Pocket antes de formatear y fusionar
+  const physicalTcgdexRaw = tcgdexRawCards.filter(
+    (c: any) => !isDigitalPocketCard(c?.id, c?.setNameOverride)
+  );
+  const physicalPtcgIoFormatted = ptcgIoFormattedCards.filter(
+    (c: any) => !isDigitalPocketCard(c?.id, c?.setName)
+  );
+
+  const formattedTcgdex = physicalTcgdexRaw.map((c: any) => {
     const setInfo = getSetInfoFromCardId(c.id || "", c.setNameOverride);
     const cachedDetail = cardDetailCache.get(c.id);
 
@@ -875,12 +937,14 @@ async function fetchCardsForCriterion(criterion: string): Promise<any[]> {
   const finalMergedList: any[] = [];
 
   for (const card of formattedTcgdex) {
+    if (isDigitalPocketCard(card.id, card.setName)) continue;
     const key = createCanonicalCardKey(card);
     canonicalMap.set(key, card);
     finalMergedList.push(card);
   }
 
-  for (const ptcgCard of ptcgIoFormattedCards) {
+  for (const ptcgCard of physicalPtcgIoFormatted) {
+    if (isDigitalPocketCard(ptcgCard.id, ptcgCard.setName)) continue;
     const key = createCanonicalCardKey(ptcgCard);
     const existing = canonicalMap.get(key);
 
@@ -937,7 +1001,7 @@ export async function GET(request: Request) {
   await ensureSetsCatalog();
 
   if (action === "sets") {
-    const sets = cachedSetsList || [];
+    const sets = (cachedSetsList || []).filter((s) => !isDigitalPocketSet(s.id, s.name));
     return NextResponse.json({ sets: [...sets].reverse() });
   }
 
@@ -961,7 +1025,7 @@ export async function GET(request: Request) {
   const singleCardCriteria = criteriaList
     .filter((c) => c.toUpperCase().startsWith("CARD:"))
     .map((c) => c.substring(5).trim())
-    .filter(Boolean);
+    .filter((id) => Boolean(id) && !isDigitalPocketCard(id));
 
   const allResults: any[] = [];
 
@@ -983,7 +1047,7 @@ export async function GET(request: Request) {
 
   const uniqueMap = new Map<string, any>();
   allResults.forEach((card, idx) => {
-    if (card?.id && !uniqueMap.has(card.id)) {
+    if (card?.id && !isDigitalPocketCard(card.id, card.setName) && !uniqueMap.has(card.id)) {
       uniqueMap.set(card.id, { ...card, addedOrder: idx });
     }
   });
@@ -1030,7 +1094,9 @@ export async function POST(request: Request) {
   try {
     await ensureSetsCatalog();
     const body = await request.json();
-    const ids: string[] = Array.isArray(body?.ids) ? body.ids.slice(0, 60) : [];
+    const ids: string[] = Array.isArray(body?.ids)
+      ? body.ids.filter((id: string) => !isDigitalPocketCard(id)).slice(0, 60)
+      : [];
 
     if (ids.length === 0) {
       return NextResponse.json({ prices: {} });
