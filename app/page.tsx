@@ -54,8 +54,9 @@ interface CardData {
   addedOrder?: number;
   image: string;
   priceUsd: number;
-  priceSource: "TCGplayer" | "Cardmarket" | "Sin precio";
+  priceSource: "TCGplayer" | "Cardmarket" | "PriceCharting" | "Sin precio";
   variants: string[];
+  variantPrices?: Record<string, number>;
   priceLoaded?: boolean;
 }
 
@@ -1119,6 +1120,7 @@ export default function Home() {
                     priceUsd: updated.priceUsd,
                     priceSource: updated.priceSource,
                     variants: updated.variants,
+                    variantPrices: updated.variantPrices || c.variantPrices,
                     priceLoaded: true,
                   };
                 }
