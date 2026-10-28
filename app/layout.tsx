@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Press_Start_2P, JetBrains_Mono } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 import AuthButton from "./AuthButton";
 
@@ -65,6 +66,9 @@ export default function RootLayout({
           </main>
 
         </div>
+        
+        {/* Vercel Analytics Tracker */}
+        <Analytics />
       </body>
     </html>
   );
