@@ -20,7 +20,12 @@ export const metadata: Metadata = {
   description: "Armá y cotizá tus Master Sets de Pokémon TCG en todos los idiomas",
   icons: {
     icon: "/icon.png",
-    apple: "/apple-touch-icon.png",
+    apple: "/icon-192x192.png",
+  },
+  appleWebApp: {
+    capable: true,
+    title: "PokéBinder",
+    statusBarStyle: "black-translucent",
   },
 };
 
@@ -39,14 +44,11 @@ export default function RootLayout({
           <header className="flex items-center justify-between pb-4 mb-4 border-b-4 border-black/80">
             <div className="flex items-center gap-4">
               
-              {/* LENTE CON LOGO Y BOLITA DE VIDRIO REFORZADA */}
-              <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-white border-4 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] relative overflow-hidden flex items-center justify-center">
-                <img 
-                  src="/logo.png?v=4" 
-                  alt="PokéBinder Logo" 
-                  className="w-[85%] h-[85%] object-contain relative z-10"
-                />
-                <div className="w-4 h-4 rounded-full bg-white/90 absolute top-1.5 left-1.5 sm:top-2 sm:left-2 z-30 pointer-events-none shadow-sm" />
+              {/* LA CLÁSICA BOLITA DE VIDRIO CELESTE DE LA POKÉDEX */}
+              <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-white p-1.5 border-4 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] shrink-0">
+                <div className="w-full h-full rounded-full bg-[#28AAFD] border-2 border-black relative overflow-hidden">
+                  <div className="w-4 h-4 rounded-full bg-white/70 absolute top-2 left-2" />
+                </div>
               </div>
 
               <div className="flex gap-2 self-start mt-1">

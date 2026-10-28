@@ -2,18 +2,23 @@ import { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "PokéBinder Dex — Master Set Tracker",
+    name: "PokéBinder Dex | Master Set Tracker",
     short_name: "PokéBinder",
-    description: "Gestor de Master Sets, precios en vivo y Trade Binder de Pokémon TCG",
+    description: "Armá y cotizá tus Master Sets de Pokémon TCG en todos los idiomas",
     start_url: "/",
     display: "standalone",
-    background_color: "#1a1c19",
-    theme_color: "#facc15",
+    background_color: "#DC0A2D",
+    theme_color: "#DC0A2D",
     icons: [
       {
-        src: "/favicon.ico",
-        sizes: "any",
-        type: "image/x-icon",
+        src: "/icon-192x192.png",
+        sizes: "192x192",
+        type: "image/png",
+      },
+      {
+        src: "/icon-512x512.png",
+        sizes: "512x512",
+        type: "image/png",
       },
     ],
   };
