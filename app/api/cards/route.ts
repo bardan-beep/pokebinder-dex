@@ -15,7 +15,7 @@ const GEN_DEX_RANGES: Record<string, [number, number]> = {
   "9": [906, 1025],
 };
 
-// Sub-sets de Galerías (Trainer Gallery / Galarian Gallery / Radiant) asociados a sets principales
+// Sub-sets de Galerías (Trainer Gallery / Galarian Gallery / Shiny Vault) asociados a sets principales
 const SUBSET_COMPANIONS: Record<string, string[]> = {
   swsh9: ["swsh9tg"],
   swsh10: ["swsh10tg"],
@@ -62,7 +62,6 @@ async function fetchWithTimeout(url: string, timeoutMs = 4500, headers?: Record<
 // Normaliza códigos de sets entre TCGdex (ej: sv03.5) y Pokémon TCG API (ej: sv3pt5)
 function tcgdexSetToPtcgIoSet(setId: string): string {
   const clean = setId.toLowerCase().trim();
-  // sv03.5 -> sv3pt5 | sv01 -> sv1 | swsh12.5 -> swsh12pt5
   const matchSv = clean.match(/^sv0?(\d+)(?:\.(\d+))?$/);
   if (matchSv) {
     return matchSv[2] ? `sv${matchSv[1]}pt${matchSv[2]}` : `sv${matchSv[1]}`;
@@ -117,7 +116,6 @@ async function ensureSetsCatalog() {
       }
     }
 
-    // Agregamos cualquier expansión o sub-set (Trainer Gallery, Promos, etc.) que esté en Pokémon TCG API y falte en TCGdex
     if (ptcgRes.status === "fulfilled" && ptcgRes.value.ok) {
       const ptcgJson = await ptcgRes.value.json();
       const ptcgSets = ptcgJson?.data || [];
@@ -141,7 +139,7 @@ async function ensureSetsCatalog() {
           } else {
             const existing = setRankMap.get(idLower) || setNameRankMap.get(nameLower);
             if (existing) {
-              if (! existing.officialCount && officialCount > 0) {
+              if (!existing.officialCount && officialCount > 0) {
                 existing.officialCount = officialCount;
               }
               setRankMap.set(idLower, existing);
@@ -187,7 +185,6 @@ function parseCardNumber(localId: string): number {
   const digits = upper.match(/\d+/);
   if (digits) {
     const num = parseInt(digits[0], 10);
-    // Ordena Trainer Gallery (TG), Galarian Gallery (GG) y Shiny Vault (SV) justo después del set base
     if (upper.startsWith("TG") || upper.startsWith("GG")) return 5000 + num;
     if (upper.startsWith("SV") || upper.startsWith("RC")) return 7000 + num;
     return 10000 + num;
@@ -195,7 +192,7 @@ function parseCardNumber(localId: string): number {
   return 99999;
 }
 
-// 4. Extrae precios y desglose por variante (TCGplayer + Cardmarket) desde cualquier estructura de API
+// 4. Extrae precios y desglose por variante (TCGplayer + Cardmarket)
 function extractPrice(card: any): {
   price: number;
   source: "TCGplayer" | "Cardmarket" | "PriceCharting" | "Sin precio";
@@ -228,7 +225,7 @@ function extractPrice(card: any): {
     return p > 0 ? Number(Number(p).toFixed(2)) : 0;
   };
 
-  // A. Revisar TCGplayer (tanto formato TCGdex como formato Pokémon TCG API)
+  // A. Revisar TCGplayer
   const tcgPrices = card.pricing?.tcgplayer || card.tcgplayer?.prices;
   if (tcgPrices && typeof tcgPrices === "object") {
     const normalP = pickBestPrice(tcgPrices.normal || tcgPrices["unlimited"]);
@@ -259,7 +256,6 @@ function extractPrice(card: any): {
       };
     }
 
-    // Buscar en cualquier otra clave de variante que traiga TCGplayer
     for (const [key, v] of Object.entries(tcgPrices)) {
       if (key !== "updated" && key !== "unit") {
         const p = pickBestPrice(v);
@@ -276,7 +272,7 @@ function extractPrice(card: any): {
     }
   }
 
-  // B. Revisar Cardmarket (tanto formato TCGdex como formato Pokémon TCG API)
+  // B. Revisar Cardmarket
   const cmPrices = card.pricing?.cardmarket || card.cardmarket?.prices;
   if (cmPrices && typeof cmPrices === "object") {
     const rawNormalEur =
@@ -330,7 +326,7 @@ function extractPrice(card: any): {
   };
 }
 
-// 5. Respaldo en vivo con PriceCharting (obtiene precio Raw, PSA 9 y PSA 10 cuando las APIs no tienen cotización)
+// 5. Respaldo en vivo con PriceCharting (CORREGIDO: Toma estrictamente la celda <td ... used_price> Ungraded/Raw)
 async function fetchPriceChartingFallback(
   cardName: string,
   cardNumber: string,
@@ -352,33 +348,46 @@ async function fetchPriceChartingFallback(
     if (!res.ok) return null;
     const html = await res.text();
 
-    const parseUsdMatch = (regex: RegExp): number => {
-      const m = html.match(regex);
-      if (m && m[1]) {
-        const val = parseFloat(m[1].replace(/,/g, ""));
+    // Si es una tabla de resultados de búsqueda, aislamos únicamente la primera fila de producto (<tr id="product-...">)
+    // para no leer nunca los encabezados <th> ni mezclar filas distintas
+    let targetScopeHtml = html;
+    const productRowMatch = html.match(/<tr[^>]*id="product-[^"]*"[^>]*>([\s\S]*?)<\/tr>/i);
+    if (productRowMatch && productRowMatch[1]) {
+      targetScopeHtml = productRowMatch[1];
+    }
+
+    // Extrae el valor en USD únicamente dentro de la etiqueta <td> correspondiente (sin saltar jamás a la celda vecina)
+    const extractTdCellPrice = (cellKeyRegex: string): number => {
+      const tdRegex = new RegExp(
+        `<td[^>]*(?:id|class)="[^"]*\\b(?:${cellKeyRegex})\\b[^"]*"[^>]*>([\\s\\S]*?)<\\/td>`,
+        "i"
+      );
+      const tdMatch = targetScopeHtml.match(tdRegex);
+      if (!tdMatch || !tdMatch[1]) return 0;
+
+      const dollarMatch = tdMatch[1].match(/\$([0-9,]+\.[0-9]{2})/);
+      if (dollarMatch && dollarMatch[1]) {
+        const val = parseFloat(dollarMatch[1].replace(/,/g, ""));
         return !isNaN(val) && val > 0 ? Number(val.toFixed(2)) : 0;
       }
       return 0;
     };
 
-    // Extrae Ungraded (used_price), Grade 9 (cib_price / complete_price) y PSA 10 (new_price)
-    const ungradedUsd = parseUsdMatch(
-      /(?:id|class)="[^"]*used_price[^"]*"[\s\S]{0,350}?\$([0-9,]+\.[0-9]{2})/i
-    );
-    const grade9Usd = parseUsdMatch(
-      /(?:id|class)="[^"]*(?:cib_price|complete_price)[^"]*"[\s\S]{0,350}?\$([0-9,]+\.[0-9]{2})/i
-    );
-    const psa10Usd = parseUsdMatch(
-      /(?:id|class)="[^"]*new_price[^"]*"[\s\S]{0,350}?\$([0-9,]+\.[0-9]{2})/i
-    );
+    // En PriceCharting: used_price = Ungraded (Raw) | cib_price / complete_price = Grade 9 | new_price / graded_price = PSA 10
+    const ungradedUsd = extractTdCellPrice("used_price");
+    const grade9Usd = extractTdCellPrice("cib_price|complete_price");
+    const psa10Usd = extractTdCellPrice("new_price|graded_price");
 
-    if (ungradedUsd > 0 || grade9Usd > 0 || psa10Usd > 0) {
-      const variantPrices: Record<string, number> = {};
-      const base = ungradedUsd || grade9Usd || psa10Usd;
-      variantPrices["Normal"] = base;
+    // REGLA ESTRICTA: El precio base de la carta SOLO puede ser el precio Ungraded (Raw).
+    // Nunca usamos PSA 9 ni PSA 10 como precio base.
+    if (ungradedUsd > 0) {
+      const variantPrices: Record<string, number> = {
+        Normal: ungradedUsd,
+      };
       if (grade9Usd > 0) variantPrices["PSA 9"] = grade9Usd;
       if (psa10Usd > 0) variantPrices["PSA 10"] = psa10Usd;
-      return { price: base, variantPrices };
+
+      return { price: ungradedUsd, variantPrices };
     }
   } catch {
     // Si PriceCharting no responde a tiempo, continuamos sin bloquear
@@ -386,7 +395,7 @@ async function fetchPriceChartingFallback(
   return null;
 }
 
-// 6. Respaldo en vivo con Pokémon TCG API (api.pokemontcg.io/v2) para hidratar precios e imágenes faltantes
+// 6. Respaldo en vivo con Pokémon TCG API (api.pokemontcg.io/v2)
 async function fetchPokemonTcgIoFallback(
   cardId: string,
   cardName?: string,
@@ -395,7 +404,6 @@ async function fetchPokemonTcgIoFallback(
   const mappedId = tcgdexCardIdToPtcgIoId(cardId);
 
   try {
-    // Intento 1: Por ID directo mapeado
     const directRes = await fetchWithTimeout(
       `https://api.pokemontcg.io/v2/cards/${encodeURIComponent(mappedId)}`,
       3800
@@ -405,7 +413,6 @@ async function fetchPokemonTcgIoFallback(
       if (json?.data) return json.data;
     }
 
-    // Intento 2: Búsqueda exacta por Nombre + Número de carta
     if (cardName && localId) {
       const cleanNum = String(localId).split("/")[0].replace(/^0+/, "").trim();
       const safeName = cardName.replace(/["\\]/g, "").trim();
@@ -421,9 +428,7 @@ async function fetchPokemonTcgIoFallback(
         }
       }
     }
-  } catch {
-    // Continúa silenciosamente si hay timeout
-  }
+  } catch {}
   return null;
 }
 
@@ -436,7 +441,6 @@ async function fetchSingleCardById(cardId: string): Promise<any | null> {
 
   let detail: any = null;
 
-  // Paso A: Intentar TCGdex Inglés ( y Japonés si es exclusiva )
   try {
     const res = await fetchWithTimeout(
       `https://api.tcgdex.net/v2/en/cards/${encodeURIComponent(cleanId)}`,
@@ -467,7 +471,7 @@ async function fetchSingleCardById(cardId: string): Promise<any | null> {
   let name = detail?.name || "Carta Pokémon";
   let localId = detail?.localId || cleanId.split("-").pop() || "1";
 
-  // Paso B: Si falta la carta en TCGdex, o no tiene precio (price === 0), o no tiene imagen, consultar Pokémon TCG API
+  // Si falta la carta en TCGdex, o no tiene precio (price === 0), o no tiene imagen, consultar Pokémon TCG API
   if (!detail || price === 0 || !image) {
     const ptcgCard = await fetchPokemonTcgIoFallback(cleanId, detail?.name, localId);
     if (ptcgCard) {
@@ -493,7 +497,7 @@ async function fetchSingleCardById(cardId: string): Promise<any | null> {
     }
   }
 
-  // Paso C: Si aún sigue sin precio, consultar PriceCharting (incluye precios Raw, PSA 9 y PSA 10)
+  // Si aún sigue sin precio, consultar PriceCharting (solo toma el precio Ungraded/Raw como precio base)
   if (price === 0 && name !== "Carta Pokémon") {
     const pcFallback = await fetchPriceChartingFallback(name, localId, setName);
     if (pcFallback && pcFallback.price > 0) {
@@ -539,7 +543,7 @@ async function fetchSingleCardById(cardId: string): Promise<any | null> {
   return fullCard;
 }
 
-// 8. Hidrata detalles y precios en lotes rápidos para no saturar conexiones
+// 8. Hidrata detalles y precios en lotes rápidos
 async function hydrateCardDetails(cardIds: string[]) {
   const results: Record<string, any> = {};
   const missingIds = cardIds.filter((id) => !cardDetailCache.has(id));
@@ -562,7 +566,7 @@ async function hydrateCardDetails(cardIds: string[]) {
   return results;
 }
 
-// 9. Normaliza perfectamente los 1025 nombres de especies de PokéAPI para no perder ningún Pokémon
+// 9. Normaliza los nombres de especies de PokéAPI
 function normalizePokeApiSpeciesName(rawName: string): string {
   const lower = String(rawName || "").toLowerCase().trim();
   const exactFixes: Record<string, string> = {
@@ -575,7 +579,7 @@ function normalizePokeApiSpeciesName(rawName: string): string {
     "mime-jr": "mime jr.",
     flabebe: "flabébé",
     "type-null": "type: null",
-    "Great-tusk": "great tusk",
+    "great-tusk": "great tusk",
   };
   if (exactFixes[lower]) return exactFixes[lower];
 
@@ -628,7 +632,7 @@ async function getPokemonNamesForGeneration(genNumber: string): Promise<string[]
   return [];
 }
 
-// Convierte una carta de Pokémon TCG API (pokemontcg.io) al formato exacto de PokéBinder Dex
+// Convierte una carta de Pokémon TCG API al formato de PokéBinder Dex
 function formatPtcgIoCardToBinder(ptcgCard: any) {
   const setInfo = getSetInfoFromCardId(ptcgCard.id || "", ptcgCard.set?.name);
   const officialTotal = Number(
@@ -671,7 +675,7 @@ function formatPtcgIoCardToBinder(ptcgCard: any) {
   };
 }
 
-// Crea una clave canónica (Set + Número + Nombre) para fusionar cartas entre TCGdex y Pokémon TCG API sin duplicarlas
+// Clave canónica (Set + Número + Nombre) para fusionar sin duplicar
 function createCanonicalCardKey(card: { name: string; setName: string; number: string; id: string }): string {
   const cleanNum = String(card.number || "")
     .split("/")[0]
@@ -687,7 +691,7 @@ function createCanonicalCardKey(card: { name: string; setName: string; number: s
   return `${cleanSet}__${cleanNum}__${cleanName}`;
 }
 
-// 10. Descarga y fusiona las cartas de un criterio desde múltiples fuentes (TCGdex + Pokémon TCG API)
+// 10. Descarga y fusiona las cartas de un criterio desde múltiples fuentes
 async function fetchCardsForCriterion(criterion: string): Promise<any[]> {
   const normalizedKey = criterion.trim();
   if (queryCardsCache.has(normalizedKey)) {
@@ -716,7 +720,6 @@ async function fetchCardsForCriterion(criterion: string): Promise<any[]> {
       const cleanPoke = value.toLowerCase().trim();
       const safePtcgQuery = `name:"*${cleanPoke.replace(/["\\]/g, "")}*"`;
 
-      // Consultamos TCGdex (EN), Pokémon TCG API (con precios incluidos) y TCGdex (JA) en paralelo
       const [tcgEnRes, ptcgRes] = await Promise.allSettled([
         fetchWithTimeout(
           `https://api.tcgdex.net/v2/en/cards?name=${encodeURIComponent(cleanPoke)}`,
@@ -766,7 +769,6 @@ async function fetchCardsForCriterion(criterion: string): Promise<any[]> {
       const setIdsToFetch = [setId, ...(SUBSET_COMPANIONS[setId.toLowerCase()] || [])];
       const ptcgSetId = tcgdexSetToPtcgIoSet(setId);
 
-      // 1. Descargar Set principal + Sub-sets (Trainer Gallery / Galarian Gallery) desde TCGdex
       const setResponses = await Promise.allSettled(
         setIdsToFetch.map((sid) =>
           fetchWithTimeout(`https://api.tcgdex.net/v2/en/sets/${encodeURIComponent(sid)}`, 4500)
@@ -791,7 +793,6 @@ async function fetchCardsForCriterion(criterion: string): Promise<any[]> {
         }
       }
 
-      // 2. Consultar el mismo Set en Pokémon TCG API para traer cartas faltantes y precios directos
       try {
         const ptcgRes = await fetchWithTimeout(
           `https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(`set.id:"${ptcgSetId}"`)}&pageSize=250`,
@@ -826,7 +827,6 @@ async function fetchCardsForCriterion(criterion: string): Promise<any[]> {
         });
       }
 
-      // Respaldo de Generación por rango de Pokédex Nacional en Pokémon TCG API
       const dexRange = GEN_DEX_RANGES[genNum];
       if (dexRange) {
         try {
@@ -848,7 +848,6 @@ async function fetchCardsForCriterion(criterion: string): Promise<any[]> {
     console.error(`Error procesando criterio ${criterion}:`, err);
   }
 
-  // Formatear las cartas provenientes de TCGdex
   const formattedTcgdex = tcgdexRawCards.map((c: any) => {
     const setInfo = getSetInfoFromCardId(c.id || "", c.setNameOverride);
     const cachedDetail = cardDetailCache.get(c.id);
@@ -872,7 +871,6 @@ async function fetchCardsForCriterion(criterion: string): Promise<any[]> {
     };
   });
 
-  // Fusión inteligente: Conserva los IDs de TCGdex (para Supabase), les inyecta precio/imagen de Pokémon TCG API en vivo, y suma las cartas que faltaban en TCGdex
   const canonicalMap = new Map<string, any>();
   const finalMergedList: any[] = [];
 
@@ -887,7 +885,6 @@ async function fetchCardsForCriterion(criterion: string): Promise<any[]> {
     const existing = canonicalMap.get(key);
 
     if (existing) {
-      // Si la carta ya estaba en TCGdex pero no tenía imagen o precio, la enriquecemos al instante
       if (!existing.image && ptcgCard.image) {
         existing.image = ptcgCard.image;
       }
@@ -913,7 +910,6 @@ async function fetchCardsForCriterion(criterion: string): Promise<any[]> {
         existing.rarity = ptcgCard.rarity;
       }
     } else {
-      // Carta que faltaba en TCGdex -> se agrega al Binder
       canonicalMap.set(key, ptcgCard);
       finalMergedList.push(ptcgCard);
     }
@@ -927,7 +923,6 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const action = searchParams.get("action");
 
-  // OPCIÓN B: BÚSQUEDA PRECISA EN TCG.FANS (100% ESTABLE, CERO ERRORES 404)
   if (action === "tcgfans") {
     const name = (searchParams.get("name") || "").trim();
     const number = (searchParams.get("number") || "").trim();
@@ -947,7 +942,6 @@ export async function GET(request: Request) {
   }
 
   const criteriaParam = searchParams.get("criteria") || searchParams.get("pokemon") || "";
-  // Ignoramos todos los metadatos serializados (HIST:, COST: y TRADE:) al buscar cartas
   const criteriaList = criteriaParam
     .split(",")
     .map((s) => s.trim())
@@ -1001,7 +995,6 @@ export async function GET(request: Request) {
     return a.cardNumOrder - b.cardNumOrder;
   });
 
-  // Hidratamos las primeras 45 cartas que aún no tengan precio cargado (el resto se hidrata en 2do plano por POST)
   const initialIdsToHydrate = sortedCards
     .slice(0, 45)
     .filter((c) => !c.priceLoaded)
