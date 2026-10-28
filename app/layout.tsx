@@ -34,10 +34,14 @@ export default function RootLayout({
           
           <header className="flex items-center justify-between pb-4 mb-4 border-b-4 border-black/80">
             <div className="flex items-center gap-4">
-              <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-white p-1.5 border-4 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
-                <div className="w-full h-full rounded-full bg-[#28AAFD] border-2 border-black relative overflow-hidden">
-                  <div className="w-4 h-4 rounded-full bg-white/70 absolute top-2 left-2" />
-                </div>
+              
+              {/* LOGO CON CACHE BUSTING (?v=2) Y OBJECT-CONTAIN */}
+              <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-white border-4 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] overflow-hidden flex items-center justify-center p-1">
+                <img 
+                  src="/logo.png?v=2" 
+                  alt="PokéBinder Logo" 
+                  className="w-full h-full object-contain"
+                />
               </div>
 
               <div className="flex gap-2 self-start mt-1">
